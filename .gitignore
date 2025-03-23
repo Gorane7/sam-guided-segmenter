@@ -1,0 +1,5 @@
+venv
+venv/*
+img/*
+segmentations/*
+err_log.txt

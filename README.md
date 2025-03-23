@@ -11,5 +11,5 @@
 - All necessary config should be on lines 28 to 32    
 - Only way to delete accepted (green) segmentations is to manually delete the corresponding bitmaps from segmentations/ folder
 - Before running you need to create the src/segmentations folder
-- To install just run install.sh from the folder that it is in
+- To install just run install.sh from the folder that it is in. Append ' 2>&1 | tee err_log.txt' to get script log to fi.e.
 - sam_annotate.py needs to be run from inside src folder, because if the folder that sam_annotate.py is in also has the sam2 folder, then it complains that the local folder might conflict with installed version of sam2

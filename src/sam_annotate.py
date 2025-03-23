@@ -9,37 +9,62 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from hydra import initialize, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
+import json
 
 click = None
+# Add variables for box drawing
+drawing_box = False
+box_mode = False
+box_start = None
+box_end = None
 
 def mouse_callback(event, x, y, flags, param):
-    global click
-    if event == cv2.EVENT_LBUTTONDOWN:
-        click = (x, y, True)
-        print(f"Clicked positive at: ({x}, {y})")
-    if event == cv2.EVENT_RBUTTONDOWN:
-        click = (x, y, False)
-        print(f"Clicked negative at: ({x}, {y})")
-
+    global click, box_start, box_end, drawing_box
+    
+    if box_mode:
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Start drawing box
+            box_start = (x, y)
+            drawing_box = True
+            print(f"Started drawing box at: ({x}, {y})")
+        elif event == cv2.EVENT_MOUSEMOVE and drawing_box:
+            # Update box end point while dragging
+            box_end = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP and drawing_box:
+            # Finish drawing box
+            box_end = (x, y)
+            drawing_box = False
+            print(f"Finished box: from ({box_start[0]}, {box_start[1]}) to ({box_end[0]}, {box_end[1]})")
+    else:
+        # Original point selection
+        if event == cv2.EVENT_LBUTTONDOWN:
+            click = (x, y, True)
+            print(f"Clicked positive at: ({x}, {y})")
+        if event == cv2.EVENT_RBUTTONDOWN:
+            click = (x, y, False)
+            print(f"Clicked negative at: ({x}, {y})")
 
 def main():
-    global click
+    global click, box_mode, box_start, box_end, drawing_box
 
-    folder = "../Vesneri_2025_03_09/Kristjan"
-    img_type = "jpg"
-    downscale = 4
-    sam2_path = "/home/gorane/code/masters/semester4/machine-vision/sam2"
+    confs = json.load(open("../conf.json"))
+
+    input_image_directory = confs["input_image_directory"]
+    img_type = confs["img_type"]
+    downscale = 2
+    sam_path = confs["sam_path"]
     i = 0  # Increase this to skip first i images in the folder
 
-    name = folder.split('/')[-1]
-    os.system(f"mkdir segmentations/{name}")
+    name = input_image_directory.split('/')[-1]
+    if not os.path.exists(f"../segmentations/{name}"):
+        os.system(f"mkdir ../segmentations/{name}")
 
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
-    initialize_config_dir(config_dir=f"{sam2_path}/sam2/configs/sam2.1/")
+    initialize_config_dir(config_dir=f"{sam_path}/sam2/configs/sam2.1/")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
-    sam2_checkpoint = "../sam2/checkpoints/sam2.1_hiera_large.pt"
+    sam2_checkpoint = f"{sam_path}/checkpoints/sam2.1_hiera_large.pt"
     model_cfg = "sam2.1_hiera_l.yaml"
     sam2 = build_sam2(model_cfg, sam2_checkpoint, device=device, apply_postprocessing=False)
     predictor = SAM2ImagePredictor(sam2)
@@ -47,19 +72,20 @@ def main():
     cv2.namedWindow("display")
     cv2.setMouseCallback("display", mouse_callback)
 
-    filenames = sorted(glob.glob(f"{folder}/*.{img_type}"))
+    filenames = sorted(glob.glob(f"{input_image_directory}/*.{img_type}"))
     exiting = False
     while True:
         filename = filenames[i]
         imgname_raw = filename.split("/")[-1].split(".")[0]
-        os.system(f"mkdir segmentations/{name}/{imgname_raw}")
+        if not os.path.exists(f"../segmentations/{name}/{imgname_raw}"):
+            os.system(f"mkdir ../segmentations/{name}/{imgname_raw}")
         img = cv2.imread(filename)
         predictor.set_image(img)
         disp_img = cv2.resize(img, None, fx=1/downscale, fy=1/downscale)
 
         old_mask = None
         save_index = 0
-        for imgname in glob.glob(f"segmentations/{name}/{imgname_raw}/*"):
+        for imgname in glob.glob(f"../segmentations/{name}/{imgname_raw}/*"):
             this_mask = cv2.imread(imgname, cv2.IMREAD_GRAYSCALE)
             if old_mask is None:
                 old_mask = this_mask
@@ -94,9 +120,27 @@ def main():
                 if np.any(small_mask > 0):
                     true_disp[small_mask > 0] = cv2.addWeighted(true_disp[small_mask > 0], 0.5, red_overlay[small_mask > 0], 0.5, 0)
 
+                        # Draw the box if in box mode and have at least a start point
+            if box_mode and box_start is not None:
+                end_point = box_end if box_end is not None else (box_start[0], box_start[1])
+                cv2.rectangle(true_disp, box_start, end_point, (255, 255, 0), 2)
+
+            # Display the mode in the corner
+            mode_text = "BOX MODE" if box_mode else "POINT MODE"
+            cv2.putText(true_disp, mode_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            
+            
             cv2.imshow("display", true_disp)
             key = cv2.waitKey(20)
             #print(f"Clicked key: {key}")
+
+            if key == ord("b"):
+                # Toggle box mode
+                box_mode = not box_mode
+                box_start = None
+                box_end = None
+                drawing_box = False
+                print(f"Box mode: {'ON' if box_mode else 'OFF'}")
 
             if key == ord("c"):
                 break
@@ -113,7 +157,7 @@ def main():
                 sam_mask_amount = 1
             if key == ord(" "):
                 # TODO: Save current mask
-                cv2.imwrite(f"segmentations/{name}/{imgname_raw}/{save_index:05d}.png", mask)
+                cv2.imwrite(f"../segmentations/{name}/{imgname_raw}/{save_index:05d}.png", mask)
                 old_mask[small_mask > 0] = 255
                 save_index += 1
                 pos_points = []
@@ -133,6 +177,38 @@ def main():
                 print(f"Showing SAM mask {sam_index}")
                 mask = masks[sam_index] * 255
                 small_mask = cv2.resize(mask, None, fx=1/downscale, fy=1/downscale)
+
+
+                        # Process box for prediction
+            if box_mode and box_start is not None and box_end is not None and not drawing_box:
+                # Convert box coordinates to full resolution
+                x1, y1 = box_start
+                x2, y2 = box_end
+                x1, y1 = x1 * downscale, y1 * downscale
+                x2, y2 = x2 * downscale, y2 * downscale
+                
+                # Ensure x1 < x2 and y1 < y2
+                box_coords = torch.tensor([min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)], 
+                                          dtype=torch.float32, device=device)
+                
+                # Predict with box
+                masks, scores, _ = predictor.predict(
+                    point_coords=None,
+                    point_labels=None,
+                    box=box_coords[None, :],
+                    multimask_output=True,
+                )
+                
+                print(f"Predicted with box: {box_coords.tolist()}")
+                print(f"Got masks: {masks.shape}")
+                sam_mask_amount = masks.shape[0]
+                sam_index = 0
+                mask = masks[sam_index] * 255
+                small_mask = cv2.resize(mask, None, fx=1/downscale, fy=1/downscale)
+                
+                # Reset box to allow drawing a new one
+                box_start = None
+                box_end = None
             if click is not None:
                 x, y, is_pos = click
                 click = None

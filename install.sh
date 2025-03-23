@@ -4,8 +4,8 @@
 set -e
 
 # Create python venv
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 
 # Install opencv into venv
 python -m pip install opencv-python

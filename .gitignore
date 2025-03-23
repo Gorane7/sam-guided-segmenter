@@ -1,5 +1,8 @@
+.venv
+.venv/*
 venv
 venv/*
 img/*
 segmentations/*
 err_log.txt
+sam2

@@ -3,6 +3,7 @@
 venv
 venv/*
 img/*
+!img/test/
 segmentations/*
 err_log.txt
 sam2

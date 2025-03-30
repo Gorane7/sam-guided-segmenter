@@ -3,13 +3,13 @@ import glob
 import torch
 import numpy as np
 import os
-
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from hydra import initialize, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 import json
+import argparse
 
 click = None
 # Add variables for box drawing
@@ -44,16 +44,14 @@ def mouse_callback(event, x, y, flags, param):
             click = (x, y, False)
             print(f"Clicked negative at: ({x}, {y})")
 
-def main():
+def main(i=0, downscale=4):
     global click, box_mode, box_start, box_end, drawing_box
 
     confs = json.load(open("../conf.json"))
 
     input_image_directory = confs["input_image_directory"]
     img_type = confs["img_type"]
-    downscale = 2
     sam_path = confs["sam_path"]
-    i = 0  # Increase this to skip first i images in the folder
 
     name = input_image_directory.split('/')[-1]
     if not os.path.exists(f"../segmentations/{name}"):
@@ -120,14 +118,16 @@ def main():
                 if np.any(small_mask > 0):
                     true_disp[small_mask > 0] = cv2.addWeighted(true_disp[small_mask > 0], 0.5, red_overlay[small_mask > 0], 0.5, 0)
 
-                        # Draw the box if in box mode and have at least a start point
+            # Draw the box if in box mode and have at least a start point
             if box_mode and box_start is not None:
                 end_point = box_end if box_end is not None else (box_start[0], box_start[1])
                 cv2.rectangle(true_disp, box_start, end_point, (255, 255, 0), 2)
 
-            # Display the mode in the corner
+            # Display info on the image
             mode_text = "BOX MODE" if box_mode else "POINT MODE"
-            cv2.putText(true_disp, mode_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            file_idx = f"Image {i + 1} of {len(filenames)}"
+            display_text = f"{file_idx} | {imgname_raw} | {sam_index + 1}/{sam_mask_amount} | {mode_text}"
+            cv2.putText(true_disp, display_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             
             
             cv2.imshow("display", true_disp)
@@ -235,10 +235,19 @@ def main():
                 print(f"Did SAM, showing sam mask {sam_index}")
         
         i += 1
+        if i >= len(filenames):
+            i = 0
+        print(f"Showing image {i} of {len(filenames)}")
 
         if exiting:
             break
 
 
 if __name__ == '__main__':
-    main()
+    print("Current working directory:", os.getcwd())
+    parser = argparse.ArgumentParser(description='SAM Annotator')
+    parser.add_argument('start_index',type=int, default=0, help='Start index for images')
+    parser.add_argument('downscale', type=int, default=4, help='Downscale factor for display')	
+    args = parser.parse_args()    
+    main(args.start_index, args.downscale)
+

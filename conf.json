@@ -1,5 +1,5 @@
 {
-    "input_image_directory" : "/home/user/repod/log-segmenter/img/test/",
+    "input_image_directory" : "/home/user/repod/log-segmenter/img/",
     "sam_path": "/home/user/repod/log-segmenter/sam2/",
-    "img_type": "JPEG"
+    "img_type": "jpg"
 } 

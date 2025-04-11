@@ -17,6 +17,7 @@ drawing_box = False
 box_mode = False
 box_start = None
 box_end = None
+delete_mode = False
 
 def mouse_callback(event, x, y, flags, param):
     global click, box_start, box_end, drawing_box
@@ -45,7 +46,7 @@ def mouse_callback(event, x, y, flags, param):
             print(f"Clicked negative at: ({x}, {y})")
 
 def main(i=0, downscale=4):
-    global click, box_mode, box_start, box_end, drawing_box
+    global click, box_mode, box_start, box_end, drawing_box, delete_mode
 
     confs = json.load(open("../conf.json"))
 
@@ -60,46 +61,68 @@ def main(i=0, downscale=4):
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
     initialize_config_dir(config_dir=f"{sam_path}/sam2/configs/sam2.1/")
+    
+    # Set up CUDA device if available, otherwise use CPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
+    
+    # Load SAM2 model configuration and checkpoint
     sam2_checkpoint = f"{sam_path}/checkpoints/sam2.1_hiera_large.pt"
     model_cfg = "sam2.1_hiera_l.yaml"
     sam2 = build_sam2(model_cfg, sam2_checkpoint, device=device, apply_postprocessing=False)
     predictor = SAM2ImagePredictor(sam2)
 
+    # Create display window and attach mouse callback for interaction
     cv2.namedWindow("display")
     cv2.setMouseCallback("display", mouse_callback)
 
+    # Get sorted list of all images in the directory
     filenames = sorted(glob.glob(f"{input_image_directory}/*.{img_type}"))
     exiting = False
     while True:
+        # Get current image filename and create its base name
         filename = filenames[i]
         imgname_raw = filename.split("/")[-1].split(".")[0]
+        
+        # Create directory for segmentations if it doesn't exist
         if not os.path.exists(f"../segmentations/{name}/{imgname_raw}"):
             os.system(f"mkdir ../segmentations/{name}/{imgname_raw}")
+            
+        # Load image and set it for the SAM predictor
         img = cv2.imread(filename)
         predictor.set_image(img)
+        
+        # Create downsized version for display purposes
         disp_img = cv2.resize(img, None, fx=1/downscale, fy=1/downscale)
 
+        mask_mapper = {}
+
+        # Retrieve and combine any existing masks for this image
         old_mask = None
         save_index = 0
         for imgname in glob.glob(f"../segmentations/{name}/{imgname_raw}/*"):
             this_mask = cv2.imread(imgname, cv2.IMREAD_GRAYSCALE)
+            mask_mapper[imgname] = this_mask.copy()
             if old_mask is None:
                 old_mask = this_mask
             else:
+                # Merge multiple masks by taking the union
                 old_mask[this_mask > 0] = 255
+            # Track the highest mask index for saving new masks
             save_index = max(save_index, int(imgname.split("/")[-1].split(".")[0]) + 1)
+            
+        # Resize existing mask for display or create empty mask if none exists
         if old_mask is not None:
             old_mask = cv2.resize(old_mask, None, fx=1/downscale, fy=1/downscale)
         else:
             old_mask = np.zeros((disp_img.shape[0], disp_img.shape[1]), dtype=np.uint8)
 
-        masks = None
-        mask = None
-        small_mask = None
-        sam_index = 0
-        sam_mask_amount = 1
+        # Initialize segmentation state variables
+        masks = None        # Will hold SAM predicted masks
+        mask = None         # Current active mask
+        small_mask = None   # Downsized version of active mask for display
+        sam_index = 0       # Index of currently displayed SAM mask
+        sam_mask_amount = 1 # Total number of SAM masks available
         pos_points = []
         neg_points = []
         
@@ -124,7 +147,9 @@ def main(i=0, downscale=4):
                 cv2.rectangle(true_disp, box_start, end_point, (255, 255, 0), 2)
 
             # Display info on the image
-            mode_text = "BOX MODE" if box_mode else "POINT MODE"
+            mode_text = "BOX MODE" if box_mode else "POINT MODE" 
+            if delete_mode:
+                mode_text = "DELETE MODE"
             file_idx = f"Image {i + 1} of {len(filenames)}"
             display_text = f"{file_idx} | {imgname_raw} | {sam_index + 1}/{sam_mask_amount} | {mode_text}"
             cv2.putText(true_disp, display_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
@@ -141,6 +166,26 @@ def main(i=0, downscale=4):
                 box_end = None
                 drawing_box = False
                 print(f"Box mode: {'ON' if box_mode else 'OFF'}")
+
+            if key == ord("d"):
+                # Toggle delete mode
+                if box_mode:
+                    # If in box mode, delete the box
+                    box_start = None
+                    box_end = None
+                    drawing_box = False
+                delete_mode = not delete_mode
+                print(f"Delete mode: {'ON' if delete_mode else 'OFF'}")
+                if delete_mode:
+                    # Clear points if delete mode is activated
+                    pos_points = []
+                    neg_points = []
+                    masks = None
+                    mask = None
+                    small_mask = None
+                    sam_index = 0
+                    sam_mask_amount = 1
+                
 
             if key == ord("c"):
                 break
@@ -209,7 +254,7 @@ def main(i=0, downscale=4):
                 # Reset box to allow drawing a new one
                 box_start = None
                 box_end = None
-            if click is not None:
+            if click is not None and not box_mode and not delete_mode:
                 x, y, is_pos = click
                 click = None
                 x *= downscale
@@ -233,7 +278,50 @@ def main(i=0, downscale=4):
                 mask = masks[sam_index] * 255
                 small_mask = cv2.resize(mask, None, fx=1/downscale, fy=1/downscale)
                 print(f"Did SAM, showing sam mask {sam_index}")
-        
+            if delete_mode and click is not None:
+                x, y, is_pos = click
+                click = None
+                x *= downscale
+                y *= downscale
+
+                if is_pos:
+                    deletion_file = None
+
+
+                    for k, v in list(mask_mapper.items()):
+                        
+                        if v[y,x] > 0:
+                            # Delete the mask
+                            deletion_file = k
+                            break
+                    if deletion_file is not None:
+                        
+                        mask_to_delete = mask_mapper[deletion_file]
+                        os.remove(deletion_file)
+                        mask_mapper.pop(deletion_file)
+                        
+                        # Regenerate old_mask from scratch with remaining masksq
+
+                        resized_mask_to_delete = cv2.resize(mask_to_delete,  None, fx=1/downscale, fy=1/downscale)
+                        old_mask[resized_mask_to_delete > 0] = 0
+
+                        small_mask = None
+                        mask = None
+                        sam_index = 0
+                        sam_mask_amount = 1 
+                        pos_points = []
+                        neg_points = []
+
+
+
+                        print(f"Deleted mask: {k}")
+
+                    # old_mask = np.zeros((disp_img.shape[0], disp_img.shape[1]), dtype=np.uint8)
+                    # for _, remaining_mask in mask_mapper.items():
+                    #     resized_mask = cv2.resize(remaining_mask, (old_mask.shape[1], old_mask.shape[0]))
+                    #     old_mask[resized_mask > 0] = 255
+                        
+    
         i += 1
         if i >= len(filenames):
             i = 0

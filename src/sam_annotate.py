@@ -45,7 +45,22 @@ def mouse_callback(event, x, y, flags, param):
             click = (x, y, False)
             print(f"Clicked negative at: ({x}, {y})")
 
-def main(i=0, downscale=4):
+def generate_distinct_colors(n):
+    """Generate n colors from a predefined list: green, blue, purple, yellow, orange, pink"""
+    predefined_colors = [
+        (0, 255, 0),    # green
+        (255, 0, 0),    # blue
+        (128, 0, 128),  # purple
+        # Darker versions
+        # dark pink
+
+    ]
+    colors = []
+    for i in range(n):
+        colors.append(predefined_colors[i % len(predefined_colors)])
+    return colors
+
+def main(image_idx=0, downscale=4):
     global click, box_mode, box_start, box_end, drawing_box, delete_mode
 
     confs = json.load(open("../conf.json"))
@@ -81,7 +96,7 @@ def main(i=0, downscale=4):
     exiting = False
     while True:
         # Get current image filename and create its base name
-        filename = filenames[i]
+        filename = filenames[image_idx]
         imgname_raw = filename.split("/")[-1].split(".")[0]
         
         # Create directory for segmentations if it doesn't exist
@@ -95,28 +110,22 @@ def main(i=0, downscale=4):
         # Create downsized version for display purposes
         disp_img = cv2.resize(img, None, fx=1/downscale, fy=1/downscale)
 
-        mask_mapper = {}
 
-        # Retrieve and combine any existing masks for this image
-        old_mask = None
+
+        # Retrieve masks for this image but keep them separate
+        mask_files = []
+        mask_images = []
         save_index = 0
         for imgname in glob.glob(f"../segmentations/{name}/{imgname_raw}/*"):
             this_mask = cv2.imread(imgname, cv2.IMREAD_GRAYSCALE)
-            mask_mapper[imgname] = this_mask.copy()
-            if old_mask is None:
-                old_mask = this_mask
-            else:
-                # Merge multiple masks by taking the union
-                old_mask[this_mask > 0] = 255
+            mask_files.append(imgname)
+            mask_images.append(cv2.resize(this_mask, None, fx=1/downscale, fy=1/downscale))
             # Track the highest mask index for saving new masks
             save_index = max(save_index, int(imgname.split("/")[-1].split(".")[0]) + 1)
-            
-        # Resize existing mask for display or create empty mask if none exists
-        if old_mask is not None:
-            old_mask = cv2.resize(old_mask, None, fx=1/downscale, fy=1/downscale)
-        else:
-            old_mask = np.zeros((disp_img.shape[0], disp_img.shape[1]), dtype=np.uint8)
-
+        
+        # Generate distinct colors for masks
+        mask_colors = generate_distinct_colors(max(1, len(mask_images)))
+        
         # Initialize segmentation state variables
         masks = None        # Will hold SAM predicted masks
         mask = None         # Current active mask
@@ -125,15 +134,23 @@ def main(i=0, downscale=4):
         sam_mask_amount = 1 # Total number of SAM masks available
         pos_points = []
         neg_points = []
-        
+        print(f"Showing image {image_idx} of {len(filenames)}")
         while True:
+
+            ##### DISPLAYING IMAGE AND METAINFORMATION ### 
+            
             true_disp = disp_img.copy()
 
-            if old_mask is not None:
-                green_overlay = np.zeros_like(true_disp)
-                green_overlay[:, :] = [0, 255, 0]
-                if np.any(old_mask > 0):
-                    true_disp[old_mask > 0] = cv2.addWeighted(true_disp[old_mask > 0], 0.5, green_overlay[old_mask > 0], 0.5, 0)
+            # Display each mask with its own color
+            for idx, mask_img in enumerate(mask_images):
+                if np.any(mask_img > 0):
+                    color = mask_colors[idx % len(mask_colors)]
+                    color_overlay = np.zeros_like(true_disp)
+                    color_overlay[:, :] = color
+                    true_disp[mask_img > 0] = cv2.addWeighted(
+                        true_disp[mask_img > 0], 0.5, 
+                        color_overlay[mask_img > 0], 0.5, 0
+                    )
 
             if small_mask is not None:
                 red_overlay = np.zeros_like(true_disp)
@@ -141,21 +158,24 @@ def main(i=0, downscale=4):
                 if np.any(small_mask > 0):
                     true_disp[small_mask > 0] = cv2.addWeighted(true_disp[small_mask > 0], 0.5, red_overlay[small_mask > 0], 0.5, 0)
 
+            # Display info on the image
+            mode_text = "BOX MODE" if box_mode else "POINT MODE" 
+            if delete_mode:
+                mode_text = "DELETE MODE"
+            file_idx = f"Image {image_idx} of {len(filenames)}"
+            display_text = f"{file_idx} | {imgname_raw} | {sam_index + 1}/{sam_mask_amount} | {mode_text}"
+            cv2.putText(true_disp, display_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            
+            cv2.imshow("display", true_disp)
+
             # Draw the box if in box mode and have at least a start point
             if box_mode and box_start is not None:
                 end_point = box_end if box_end is not None else (box_start[0], box_start[1])
                 cv2.rectangle(true_disp, box_start, end_point, (255, 255, 0), 2)
 
-            # Display info on the image
-            mode_text = "BOX MODE" if box_mode else "POINT MODE" 
-            if delete_mode:
-                mode_text = "DELETE MODE"
-            file_idx = f"Image {i + 1} of {len(filenames)}"
-            display_text = f"{file_idx} | {imgname_raw} | {sam_index + 1}/{sam_mask_amount} | {mode_text}"
-            cv2.putText(true_disp, display_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-            
-            
-            cv2.imshow("display", true_disp)
+            ##### DISPLAYING IMAGE AND METAINFORMATION ### 
+
+
             key = cv2.waitKey(20)
             #print(f"Clicked key: {key}")
 
@@ -203,7 +223,9 @@ def main(i=0, downscale=4):
             if key == ord(" "):
                 # TODO: Save current mask
                 cv2.imwrite(f"../segmentations/{name}/{imgname_raw}/{save_index:05d}.png", mask)
-                old_mask[small_mask > 0] = 255
+                # Save the mask to the list
+                mask_files.append(f"../segmentations/{name}/{imgname_raw}/{save_index:05d}.png")
+                mask_images.append(small_mask)
                 save_index += 1
                 pos_points = []
                 neg_points = []
@@ -224,7 +246,7 @@ def main(i=0, downscale=4):
                 small_mask = cv2.resize(mask, None, fx=1/downscale, fy=1/downscale)
 
 
-                        # Process box for prediction
+            # Process box for prediction
             if box_mode and box_start is not None and box_end is not None and not drawing_box:
                 # Convert box coordinates to full resolution
                 x1, y1 = box_start
@@ -281,29 +303,26 @@ def main(i=0, downscale=4):
             if delete_mode and click is not None:
                 x, y, is_pos = click
                 click = None
-                x *= downscale
-                y *= downscale
+
 
                 if is_pos:
                     deletion_file = None
+                    mask_to_delete = None
 
 
-                    for k, v in list(mask_mapper.items()):
-                        
+                    for idx, (k, v) in enumerate(zip(mask_files, mask_images)):
                         if v[y,x] > 0:
                             # Delete the mask
                             deletion_file = k
+                            mask_to_delete = v
                             break
-                    if deletion_file is not None:
+                    if deletion_file  is not None and mask_to_delete is not None:
                         
-                        mask_to_delete = mask_mapper[deletion_file]
+                        #mask_to_delete = mask_mapper[deletion_file]
                         os.remove(deletion_file)
-                        mask_mapper.pop(deletion_file)
-                        
-                        # Regenerate old_mask from scratch with remaining masksq
-
-                        resized_mask_to_delete = cv2.resize(mask_to_delete,  None, fx=1/downscale, fy=1/downscale)
-                        old_mask[resized_mask_to_delete > 0] = 0
+    
+                        mask_files.pop(idx)
+                        mask_images.pop(idx)
 
                         small_mask = None
                         mask = None
@@ -316,16 +335,12 @@ def main(i=0, downscale=4):
 
                         print(f"Deleted mask: {k}")
 
-                    # old_mask = np.zeros((disp_img.shape[0], disp_img.shape[1]), dtype=np.uint8)
-                    # for _, remaining_mask in mask_mapper.items():
-                    #     resized_mask = cv2.resize(remaining_mask, (old_mask.shape[1], old_mask.shape[0]))
-                    #     old_mask[resized_mask > 0] = 255
                         
     
-        i += 1
-        if i >= len(filenames):
-            i = 0
-        print(f"Showing image {i} of {len(filenames)}")
+        image_idx += 1
+        if image_idx >= len(filenames):
+            image_idx = 0
+
 
         if exiting:
             break

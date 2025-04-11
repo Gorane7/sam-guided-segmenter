@@ -48,12 +48,16 @@ def mouse_callback(event, x, y, flags, param):
 def generate_distinct_colors(n):
     """Generate n colors from a predefined list: green, blue, purple, yellow, orange, pink"""
     predefined_colors = [
-        (0, 255, 0),    # green
-        (255, 0, 0),    # blue
-        (128, 0, 128),  # purple
-        # Darker versions
-        # dark pink
-
+        (0, 255, 0),     # Green
+        (255, 0, 0),     # Blue
+        (0, 255, 255),   # Yellow
+        (255, 0, 255),   # Magenta
+        (0, 128, 255),   # Orange
+        (255, 255, 0),   # Cyan
+        (128, 0, 255),   # Purple
+        #(0, 165, 255),   # Light orange
+        #(255, 192, 203), # Pink
+        (144, 238, 144)  # Light green
     ]
     colors = []
     for i in range(n):
@@ -92,7 +96,11 @@ def main(image_idx=0, downscale=4):
     cv2.setMouseCallback("display", mouse_callback)
 
     # Get sorted list of all images in the directory
-    filenames = sorted(glob.glob(f"{input_image_directory}/*.{img_type}"))
+    filenames = sorted(
+        glob.glob(f"{input_image_directory}/*.jpg") +
+        glob.glob(f"{input_image_directory}/*.JPG") +
+        glob.glob(f"{input_image_directory}/*.JPEG")
+    )
     exiting = False
     while True:
         # Get current image filename and create its base name
@@ -116,9 +124,11 @@ def main(image_idx=0, downscale=4):
         mask_files = []
         mask_images = []
         save_index = 0
-        for imgname in glob.glob(f"../segmentations/{name}/{imgname_raw}/*"):
+        print(f"Loading masks for {imgname_raw}")
+        for imgname in glob.glob(f"../segmentations/{name}/{imgname_raw}/*.png"):
             this_mask = cv2.imread(imgname, cv2.IMREAD_GRAYSCALE)
             mask_files.append(imgname)
+            print(f"Loading mask: {imgname}")
             mask_images.append(cv2.resize(this_mask, None, fx=1/downscale, fy=1/downscale))
             # Track the highest mask index for saving new masks
             save_index = max(save_index, int(imgname.split("/")[-1].split(".")[0]) + 1)
